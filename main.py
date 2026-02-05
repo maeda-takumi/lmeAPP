@@ -31,6 +31,10 @@ def ensure_users_columns(conn):
         cur.execute("ALTER TABLE users ADD COLUMN support TEXT")
         conn.commit()
 
+    if "tags" not in cols:
+        cur.execute("ALTER TABLE users ADD COLUMN tags TEXT")
+        conn.commit()
+
 def initialize_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -40,7 +44,8 @@ def initialize_db():
             line_name TEXT,
             href TEXT,
             support TEXT,
-            friend_registered_at TEXT
+            friend_registered_at TEXT,
+            tags TEXT
         )
     """)
     conn.commit()

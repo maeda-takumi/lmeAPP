@@ -18,6 +18,8 @@ from selenium.webdriver.chrome.options import Options
 # 既存ロジック
 from main import initialize_db, scrape_user_list
 from message import initialize_message_table, scrape_messages
+from tags import scrape_tags
+# from tags import initialize_tag_table, scrape_tags
 
 # スタイル
 from style import app_stylesheet, apply_card_shadow
@@ -108,12 +110,13 @@ class UILogger(QObject):
     open_gate = Signal(str, str, object, object)
 
 # ===================== ユーティリティ =====================
-def clear_tables():
+def clear_tables(include_messages: bool = True):
     """users / messages テーブルの中身をクリア"""
     conn = sqlite3.connect("lstep_users.db")
     cur = conn.cursor()
     cur.execute("DELETE FROM users")
-    cur.execute("DELETE FROM messages")
+    if include_messages:
+        cur.execute("DELETE FROM messages")
     conn.commit()
     conn.close()
 
@@ -187,7 +190,7 @@ def run_scraping(logger: UILogger):
                 return  # finally へ
 
         logger.message.emit("🟡 一覧を取得中…")
-        scrape_user_list(driver)
+        # scrape_user_list(driver)
 
         logger.message.emit("🟡 メッセージ取得を開始します…")
         scrape_messages(driver, logger)
@@ -201,6 +204,90 @@ def run_scraping(logger: UILogger):
             # 続行は可能なので、アプリは止めずにログだけ出す
             
         logger.message.emit("🎉 全処理が完了しました！")
+    except Exception as e:
+        logger.message.emit(f"❌ エラー: {e}")
+        logger.show_error.emit("エラー", f"{e}")
+    finally:
+        try:
+            if driver:
+                driver.quit()
+        except Exception:
+            pass
+        logger.enable_ui.emit(True)
+
+def run_tag_scraping(logger: UILogger):
+    driver = None
+    try:
+        logger.enable_ui.emit(False)
+        logger.message.emit("🟡 初期化中…")
+        initialize_db()
+        logger.message.emit("🟡 既存データをクリアします（users）")
+        clear_tables(include_messages=False)
+
+        logger.message.emit("🟡 ブラウザを起動します…")
+        options = Options()
+        options.add_experimental_option("detach", True)
+        driver = webdriver.Chrome(options=options)
+        driver.get("https://step.lme.jp/")
+        driver.get("https://step.lme.jp/")
+
+        # ▼▼▼ ログインフォーム自動入力（ボタン押下なし） ▼▼▼
+        try:
+            logger.message.emit("🟡 ログインID・パスワードを自動入力しています…")
+
+            # ログインフォームの要素が出るまで待機
+            wait = WebDriverWait(driver, 20)
+
+            # id="email_login" の入力欄を取得
+            login_id = wait.until(
+                EC.presence_of_element_located((By.ID, "email_login"))
+            )
+
+            # id="password_login" の入力欄を取得
+            login_pw = wait.until(
+                EC.presence_of_element_located((By.ID, "password_login"))
+            )
+
+            # 値を入力（とりあえずダミー）
+            login_id.clear()
+            login_id.send_keys("miomama0605@gmail.com")
+
+            login_pw.clear()
+            login_pw.send_keys("20250606@Mio")
+
+            logger.message.emit("🟡 ID・パスワードの入力が完了しました。ログイン操作は手動で行ってください。")
+
+        except Exception as e:
+            logger.message.emit(f"⚠️ ログイン自動入力に失敗: {e}")
+
+        # ▲▲▲ 自動入力ここまで ▲▲▲
+
+        # ---- UIゲート（OKで続行 / キャンセルで中断）----
+        proceed_event = threading.Event()
+        cancel_event = threading.Event()
+        instructions = (
+            "1) ブラウザでLステップにログインしてください。\n"
+            "2) 対象の『友達リスト』まで手動で移動してください。\n"
+            "3) 画面が開けたら、このポップアップの［続行］を押してください。\n\n"
+            "※［キャンセル］を押すと処理を中断します。"
+        )
+        logger.open_gate.emit("ログイン＆移動のお願い", instructions, proceed_event, cancel_event)
+
+        # どちらかが押されるまで待つ（ポーリングで両方監視）
+        while True:
+            if proceed_event.wait(timeout=0.1):
+                break
+            if cancel_event.is_set():
+                logger.message.emit("🛑 ユーザー操作によりキャンセルされました。")
+                return  # finally へ
+
+        logger.message.emit("🟡 一覧を取得中…")
+        # scrape_user_list(driver)
+
+        logger.message.emit("🟡 タグ取得を開始します…")
+        scrape_tags(driver, logger)
+
+        logger.message.emit("🎉 タグ取得の処理が完了しました！")
     except Exception as e:
         logger.message.emit(f"❌ エラー: {e}")
         logger.show_error.emit("エラー", f"{e}")
@@ -247,6 +334,10 @@ class MainWindow(QWidget):
         self.btn_scrape.clicked.connect(self.on_click_scrape)
         row1.addWidget(self.btn_scrape)
 
+        self.btn_tag_scrape = QPushButton("タグ取得実行")
+        self.btn_tag_scrape.clicked.connect(self.on_click_tag_scrape)
+        row1.addWidget(self.btn_tag_scrape)
+        
         row2 = QHBoxLayout()
         self.btn_upload = QPushButton("サーバーアップロード実行")
         self.btn_upload.clicked.connect(self.on_click_upload)
@@ -312,15 +403,13 @@ class MainWindow(QWidget):
     # ---------- UI slots ----------
     def set_controls_enabled(self, enabled: bool):
         self.btn_scrape.setEnabled(enabled)
+        self.btn_tag_scrape.setEnabled(enabled)
         self.btn_upload.setEnabled(enabled)
         # self.btn_analysis.setEnabled(enabled)
         self.btn_export.setEnabled(enabled)   # ← 追加
 
     def append_log(self, text: str):
         self.log.appendPlainText(text)
-    def on_click_scrape(self):
-        t = threading.Thread(target=run_scraping, args=(self.logger,), daemon=True)
-        t.start()
 
     def run_export(self):
         try:
@@ -364,6 +453,10 @@ class MainWindow(QWidget):
         t = threading.Thread(target=run_scraping, args=(self.logger,), daemon=True)
         t.start()
 
+    def on_click_tag_scrape(self):
+        t = threading.Thread(target=run_tag_scraping, args=(self.logger,), daemon=True)
+        t.start()
+        
     def on_click_upload(self):
         t = threading.Thread(target=self.run_upload, daemon=True)
         t.start()
