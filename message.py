@@ -308,6 +308,29 @@ def _wait_friend_info_ready(driver, timeout=10) -> bool:
     except TimeoutException:
         return False
 
+def _open_friend_info_tab(driver, timeout=10) -> bool:
+    """
+    友だち情報タブを開く。
+    取得対象の要素はタブを開かないと描画されないため、明示的にクリックする。
+    """
+    selectors = [
+        "[href='#friend-info']",
+        "div[data-toggle='tab'][href='#friend-info']",
+    ]
+
+    for selector in selectors:
+        try:
+            tab = WebDriverWait(driver, timeout).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+            )
+            driver.execute_script("arguments[0].click();", tab)
+            return True
+        except TimeoutException:
+            continue
+        except Exception:
+            continue
+
+    return False
 def normalize_time_sent(current_date: str, time_sent_raw: str):
     """
     current_date: 'YYYY-MM-DD' or None
@@ -413,6 +436,13 @@ def scrape_messages(driver, logger, base_url="https://step.lme.jp"):
             update_user_friend_value(user_id, "{}")
             continue
 
+        if not _open_friend_info_tab(driver, timeout=8):
+            logger.message.emit(
+                f"⚠️ friend-info タブのクリックに失敗: user_id={user_id}"
+            )
+            update_user_friend_value(user_id, "{}")
+            continue
+        
         if not _wait_friend_info_ready(driver, timeout=12):
             logger.message.emit(
                 f"⚠️ friend-info の描画待機がタイムアウト: user_id={user_id}"
