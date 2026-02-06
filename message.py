@@ -292,6 +292,22 @@ def _extract_friend_value_json(soup: BeautifulSoup) -> str:
         return json.dumps(values, ensure_ascii=False) if values else "{}"
     except Exception:
         return "{}"
+def _wait_friend_info_ready(driver, timeout=10) -> bool:
+    """
+    友だち情報パネルの描画完了を待つ。
+    #friend-info が存在し、内部のラベル(p)が最低1つ出るまで待機する。
+    """
+    try:
+        WebDriverWait(driver, timeout).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "#friend-info"))
+        )
+        WebDriverWait(driver, timeout).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "#friend-info p"))
+        )
+        return True
+    except TimeoutException:
+        return False
+
 def normalize_time_sent(current_date: str, time_sent_raw: str):
     """
     current_date: 'YYYY-MM-DD' or None
@@ -396,7 +412,13 @@ def scrape_messages(driver, logger, base_url="https://step.lme.jp"):
             print(f"⚠️ チャットページ遷移失敗: {e}")
             update_user_friend_value(user_id, "{}")
             continue
-        
+
+        if not _wait_friend_info_ready(driver, timeout=12):
+            logger.message.emit(
+                f"⚠️ friend-info の描画待機がタイムアウト: user_id={user_id}"
+            )
+            update_user_friend_value(user_id, "{}")
+            continue
         # friend_value はチャットページで取得して毎回上書き
         soup_friend = BeautifulSoup(driver.page_source, "html.parser")
         friend_value_json = _extract_friend_value_json(soup_friend)
