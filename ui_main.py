@@ -3,6 +3,7 @@ import sys
 import sqlite3
 import threading
 import csv, os
+import json
 from datetime import datetime
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
@@ -50,10 +51,43 @@ def export_tables_to_csv(db_path: str = "lstep_users.db", out_dir: str = "export
         cur.execute("SELECT * FROM users")
         cols_u = [d[0] for d in cur.description]
         rows_u = cur.fetchall()
+        friend_value_idx = cols_u.index("friend_value") if "friend_value" in cols_u else None
+        friend_value_labels = []
+        friend_value_label_set = set()
+        parsed_friend_values = []
+
+        if friend_value_idx is not None:
+            for row in rows_u:
+                raw = row[friend_value_idx]
+                parsed = {}
+                if raw:
+                    try:
+                        json_obj = json.loads(raw)
+                        if isinstance(json_obj, dict):
+                            parsed = {str(k): v for k, v in json_obj.items()}
+                    except (json.JSONDecodeError, TypeError):
+                        parsed = {}
+
+                parsed_friend_values.append(parsed)
+                for label in parsed.keys():
+                    if label not in friend_value_label_set:
+                        friend_value_label_set.add(label)
+                        friend_value_labels.append(label)
+
+            cols_u_export = [c for c in cols_u if c != "friend_value"] + friend_value_labels
+            rows_u_export = []
+            for row, parsed in zip(rows_u, parsed_friend_values):
+                base = [v for i, v in enumerate(row) if i != friend_value_idx]
+                extra = [parsed.get(label, "") for label in friend_value_labels]
+                rows_u_export.append(base + extra)
+        else:
+            cols_u_export = cols_u
+            rows_u_export = rows_u
+
         with open(out_users, "w", encoding="utf-8-sig", newline="") as fw:
             w = csv.writer(fw)
-            w.writerow(cols_u)
-            w.writerows(rows_u)
+            w.writerow(cols_u_export)
+            w.writerows(rows_u_export)
 
         # messages
         cur.execute("SELECT * FROM messages")
@@ -64,7 +98,7 @@ def export_tables_to_csv(db_path: str = "lstep_users.db", out_dir: str = "export
             w.writerow(cols_m)
             w.writerows(rows_m)
 
-        return {"users": out_users, "messages": out_messages, "users_count": len(rows_u), "messages_count": len(rows_m)}
+        return {"users": out_users, "messages": out_messages, "users_count": len(rows_u_export), "messages_count": len(rows_m)}
     finally:
         conn.close()
 
