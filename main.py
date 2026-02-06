@@ -219,8 +219,6 @@ def scrape_current_page(driver):
         print(f"{name}: {href} / friend_registered_at={friend_registered_at} / display_name={display_name}")
         save_to_db(name, href, friend_registered_at=friend_registered_at, display_name=display_name)
 
-        print(f"{name}: {href} / friend_registered_at={friend_registered_at}")
-        save_to_db(name, href, friend_registered_at=friend_registered_at)
 
         # 開きまくるので軽く間隔（必要なら調整）
         time.sleep(0.2)
