@@ -13,6 +13,7 @@ import os
 from selenium import webdriver
 import threading
 import re
+import json
 from datetime import datetime
 RESUME_FILE = "last_user_id.txt"  # ← 再開用ファイル
 current_date = None  # ← 追加：日付ヘッダの状態保持
@@ -246,6 +247,51 @@ def restart_driver_with_ui(driver, logger):
 # =========================
 # ✅ time_sent を必ず YYYY-MM-DD HH:MM:SS に正規化
 # =========================
+def update_user_friend_value(user_id: int, friend_value_json: str):
+    conn = sqlite3.connect("lstep_users.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE users SET friend_value = ? WHERE id = ?",
+        (friend_value_json, user_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _extract_friend_value_json(soup: BeautifulSoup) -> str:
+    try:
+        values = {}
+        friend_info = soup.select_one("#friend-info")
+        if not friend_info:
+            return "{}"
+
+        blocks = friend_info.select(r"div.mt-\[20px\], div.border-b")
+        for block in blocks:
+            label_elem = block.select_one("p")
+            if not label_elem:
+                continue
+
+            label = label_elem.get_text(" ", strip=True)
+            if not label:
+                continue
+
+            value = ""
+            value_elem = block.select_one("span, input, textarea")
+            if value_elem:
+                if value_elem.name in {"input", "textarea"}:
+                    value = (value_elem.get("value") or "").strip()
+                else:
+                    value = value_elem.get_text(" ", strip=True)
+            else:
+                value_container = label_elem.find_next_sibling("div")
+                if value_container:
+                    value = value_container.get_text(" ", strip=True)
+
+            values[label] = value
+
+        return json.dumps(values, ensure_ascii=False) if values else "{}"
+    except Exception:
+        return "{}"
 def normalize_time_sent(current_date: str, time_sent_raw: str):
     """
     current_date: 'YYYY-MM-DD' or None
@@ -348,7 +394,13 @@ def scrape_messages(driver, logger, base_url="https://step.lme.jp"):
             time.sleep(3)
         except Exception as e:
             print(f"⚠️ チャットページ遷移失敗: {e}")
+            update_user_friend_value(user_id, "{}")
             continue
+        
+        # friend_value はチャットページで取得して毎回上書き
+        soup_friend = BeautifulSoup(driver.page_source, "html.parser")
+        friend_value_json = _extract_friend_value_json(soup_friend)
+        update_user_friend_value(user_id, friend_value_json)
 
 
         # =========================

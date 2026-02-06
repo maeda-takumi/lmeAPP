@@ -190,7 +190,7 @@ def run_scraping(logger: UILogger):
                 return  # finally へ
 
         logger.message.emit("🟡 一覧を取得中…")
-        # scrape_user_list(driver)
+        scrape_user_list(driver)
 
         logger.message.emit("🟡 メッセージ取得を開始します…")
         scrape_messages(driver, logger)
@@ -282,7 +282,7 @@ def run_tag_scraping(logger: UILogger):
                 return  # finally へ
 
         logger.message.emit("🟡 一覧を取得中…")
-        # scrape_user_list(driver)
+        scrape_user_list(driver)
 
         logger.message.emit("🟡 タグ取得を開始します…")
         scrape_tags(driver, logger)

@@ -9,7 +9,7 @@ import sqlite3
 import time
 import re
 from urllib.parse import urljoin
-
+from typing import Optional
 from message import initialize_message_table, scrape_messages
 
 DB_PATH = "lstep_users.db"
@@ -35,6 +35,14 @@ def ensure_users_columns(conn):
         cur.execute("ALTER TABLE users ADD COLUMN tags TEXT")
         conn.commit()
 
+    if "display_name" not in cols:
+        cur.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
+        conn.commit()
+
+    if "friend_value" not in cols:
+        cur.execute("ALTER TABLE users ADD COLUMN friend_value TEXT")
+        conn.commit()
+
 def initialize_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -45,7 +53,9 @@ def initialize_db():
             href TEXT,
             support TEXT,
             friend_registered_at TEXT,
-            tags TEXT
+            tags TEXT,
+            display_name TEXT,
+            friend_value TEXT
         )
     """)
     conn.commit()
@@ -60,13 +70,35 @@ def clear_tables():
     conn.commit()
     conn.close()
 
-def save_to_db(name, href, friend_registered_at=None, support=None):
+def save_to_db(name, href, friend_registered_at=None, support=None, display_name=None):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO users (line_name, href, friend_registered_at, support) VALUES (?, ?, ?, ?)",
-        (name, href, friend_registered_at, support)
-    )
+
+    existing_id = None
+    if href:
+        cursor.execute("SELECT id FROM users WHERE href = ? ORDER BY id ASC LIMIT 1", (href,))
+        row = cursor.fetchone()
+        if row:
+            existing_id = row[0]
+
+    if existing_id:
+        cursor.execute(
+            """
+            UPDATE users
+            SET line_name = ?, href = ?, friend_registered_at = ?, support = ?, display_name = ?
+            WHERE id = ?
+            """,
+            (name, href, friend_registered_at, support, display_name, existing_id)
+        )
+    else:
+        cursor.execute(
+            """
+            INSERT INTO users (line_name, href, friend_registered_at, support, display_name)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (name, href, friend_registered_at, support, display_name)
+        )
+
     conn.commit()
     conn.close()
 
@@ -76,7 +108,14 @@ def save_to_db(name, href, friend_registered_at=None, support=None):
 # -------------------------
 DT_RE = re.compile(r"(\d{4}[./-]\d{2}[./-]\d{2})\s+(\d{2}:\d{2})")
 
-def fetch_friend_registered_at_from_detail(driver, href, timeout=12, debug=False):
+def _clean_display_name(raw: Optional[str]) -> Optional[str]:
+    if raw is None:
+        return None
+    cleaned = raw.replace('"', "").strip()
+    return cleaned or None
+
+
+def fetch_user_detail_info(driver, href, timeout=12, debug=False):
     detail_url = urljoin(BASE_URL, href)
     original_handle = driver.current_window_handle
     before_handles = set(driver.window_handles)
@@ -95,6 +134,16 @@ def fetch_friend_registered_at_from_detail(driver, href, timeout=12, debug=False
         )
 
         raw = None
+        display_name = None
+
+        display_name_elem = driver.find_elements(By.CSS_SELECTOR, "#show_real_info_custom div.title-bg")
+        if display_name_elem:
+            display_name = _clean_display_name(display_name_elem[0].text)
+        else:
+            soup = BeautifulSoup(driver.page_source, "html.parser")
+            display_name_tag = soup.select_one("#show_real_info_custom div.title-bg")
+            if display_name_tag:
+                display_name = _clean_display_name(display_name_tag.get_text(" ", strip=True))
 
         # ✅ ラベル揺れ吸収：友だち追加「日付/日時」どちらもOK
         els = driver.find_elements(
@@ -117,18 +166,27 @@ def fetch_friend_registered_at_from_detail(driver, href, timeout=12, debug=False
             print("[DEBUG] label td not found url=", driver.current_url)
 
         if not raw:
-            return None
+            return {
+                "friend_registered_at": None,
+                "display_name": display_name,
+            }
 
         m = DT_RE.search(raw)
         if not m:
             if debug:
                 print("[DEBUG] datetime not matched url=", driver.current_url)
                 print("[DEBUG] raw=", raw)
-            return None
+            return {
+                "friend_registered_at": None,
+                "display_name": display_name,
+            }
 
         date_part = m.group(1).replace(".", "-").replace("/", "-")
         time_part = m.group(2)
-        return f"{date_part} {time_part}"
+        return {
+            "friend_registered_at": f"{date_part} {time_part}",
+            "display_name": display_name,
+        }
 
     finally:
         driver.close()
@@ -152,8 +210,14 @@ def scrape_current_page(driver):
 
         # ★ ここで詳細ページへ取りに行く（時刻込み）
         friend_registered_at = None
+        display_name = None
         if href:
-            friend_registered_at = fetch_friend_registered_at_from_detail(driver, href)
+            detail = fetch_user_detail_info(driver, href)
+            friend_registered_at = detail.get("friend_registered_at")
+            display_name = detail.get("display_name")
+            
+        print(f"{name}: {href} / friend_registered_at={friend_registered_at} / display_name={display_name}")
+        save_to_db(name, href, friend_registered_at=friend_registered_at, display_name=display_name)
 
         print(f"{name}: {href} / friend_registered_at={friend_registered_at}")
         save_to_db(name, href, friend_registered_at=friend_registered_at)
